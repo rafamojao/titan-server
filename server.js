@@ -5,7 +5,7 @@ const wss = new WebSocket.Server({ port: 8080 });
 
 console.log("📡 Servidor Titan Online en puerto 8080");
 
-// Lista de usuarios conectados
+// Lista de usuarios (referencia, aunque usamos wss.clients para la verdad)
 let usuariosConectados = [];
 
 wss.on('connection', (ws) => {
@@ -18,7 +18,7 @@ wss.on('connection', (ws) => {
         try {
             const datos = JSON.parse(message.toString());
 
-            // CASO 1: ALGUIEN SE CONECTA O CAMBIA DE NOMBRE
+            // --- CASO 1: LOGIN (Usuario se identifica) ---
             if (datos.tipo === 'login') {
                 ws.nombreUsuario = datos.autor;
                 
@@ -26,19 +26,28 @@ wss.on('connection', (ws) => {
                 actualizarListaUsuarios();
             }
 
-            // CASO 2: MENSAJE DE CHAT
-            if (datos.canal) { // Si tiene canal, es un chat
+            // --- CASO 2: MENSAJE DE CHAT (Texto) ---
+            else if (datos.canal) { 
                 console.log(`[${datos.canal}] ${datos.autor}: ${datos.texto}`);
+                
+                // El chat se envía a TODOS (incluido el que lo escribió para que lo vea)
                 broadcast({
                     tipo: 'chat',
                     autor: datos.autor,
                     texto: datos.texto,
                     canal: datos.canal,
                     hora: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                });
+                }, true); // true = enviar a mí mismo también
             }
 
-        } catch (e) { console.error("Error:", e); }
+            // --- CASO 3: SEÑALIZACIÓN WebRTC (AUDIO/VIDEO) ---
+            // Esto conecta a los usuarios entre sí. 
+            // IMPORTANTE: Se envía a todos MENOS al que lo envió (evitar eco lógico).
+            else if (datos.tipo === 'oferta' || datos.tipo === 'respuesta' || datos.tipo === 'candidato') {
+                broadcast(datos, false, ws); 
+            }
+
+        } catch (e) { console.error("Error procesando mensaje:", e); }
     });
 
     ws.on('close', () => {
@@ -46,9 +55,10 @@ wss.on('connection', (ws) => {
         actualizarListaUsuarios();
     });
 
-    // Función auxiliar para avisar a todos de quién está online
+    // --- FUNCIONES AUXILIARES ---
+
+    // Función para avisar a todos de quién está online
     function actualizarListaUsuarios() {
-        // Creamos una lista limpia solo con los nombres
         const listaNombres = [];
         wss.clients.forEach((cliente) => {
             if (cliente.readyState === WebSocket.OPEN && cliente.nombreUsuario) {
@@ -56,17 +66,28 @@ wss.on('connection', (ws) => {
             }
         });
 
-        // Enviamos la lista a TODOS
+        // Enviamos la lista a TODOS (true)
         broadcast({
             tipo: 'lista-usuarios',
             usuarios: listaNombres
-        });
+        }, true);
     }
 
-    // Función para enviar a todos
-    function broadcast(data) {
+    /**
+     * Función BROADCAST MEJORADA
+     * @param {object} data - El mensaje JSON a enviar
+     * @param {boolean} enviarAmiMismo - Si es true, me lo envía a mí también. Si es false, me ignora.
+     * @param {WebSocket} remitente - El socket del que envía el mensaje (para poder ignorarlo si es necesario)
+     */
+    function broadcast(data, enviarAmiMismo, remitente) {
         wss.clients.forEach(cliente => {
             if (cliente.readyState === WebSocket.OPEN) {
+                // Lógica de filtrado:
+                // Si 'enviarAmiMismo' es falso Y el cliente actual es el remitente... NO enviamos.
+                if (!enviarAmiMismo && cliente === remitente) {
+                    return; 
+                }
+                
                 cliente.send(JSON.stringify(data));
             }
         });
