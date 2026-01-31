@@ -6,53 +6,69 @@ const wss = new WebSocket.Server({ port: 8080 });
 console.log("📡 Servidor Titan Online en puerto 8080");
 
 // Lista de usuarios conectados
-let clientes = [];
+let usuariosConectados = [];
 
 wss.on('connection', (ws) => {
-  // 1. Cuando alguien se conecta, lo guardamos
-  clientes.push(ws);
-  console.log("Nuevo Piloto conectado. Total: " + clientes.length);
+    console.log('Nueva conexión al núcleo Titan.');
 
-  // Le damos la bienvenida solo a él
-  ws.send(JSON.stringify({
-    tipo: 'sistema',
-    texto: 'Conectado al Nodo Central de Titan.'
-  }));
+    // Asignamos un nombre temporal al conectar
+    ws.nombreUsuario = "Anónimo"; 
 
-  // 2. Cuando recibimos un mensaje de alguien
-  ws.on('message', (message) => {
-    try {
-        // El mensaje llega como "buffer" (datos crudos), lo convertimos a texto
-        const datos = JSON.parse(message.toString());
-        
-        console.log(`[${datos.canal}] ${datos.autor}: ${datos.texto}`);
+    ws.on('message', (message) => {
+        try {
+            const datos = JSON.parse(message.toString());
 
-        // 3. REENVIAR A TODOS (Broadcast)
-        const mensajeParaEnviar = JSON.stringify({
-          tipo: 'chat',
-          autor: datos.autor,
-          texto: datos.texto,
-          canal: datos.canal,
-          hora: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            // CASO 1: ALGUIEN SE CONECTA O CAMBIA DE NOMBRE
+            if (datos.tipo === 'login') {
+                ws.nombreUsuario = datos.autor;
+                
+                // Actualizar lista global
+                actualizarListaUsuarios();
+            }
+
+            // CASO 2: MENSAJE DE CHAT
+            if (datos.canal) { // Si tiene canal, es un chat
+                console.log(`[${datos.canal}] ${datos.autor}: ${datos.texto}`);
+                broadcast({
+                    tipo: 'chat',
+                    autor: datos.autor,
+                    texto: datos.texto,
+                    canal: datos.canal,
+                    hora: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                });
+            }
+
+        } catch (e) { console.error("Error:", e); }
+    });
+
+    ws.on('close', () => {
+        // Cuando alguien se va, actualizamos la lista
+        actualizarListaUsuarios();
+    });
+
+    // Función auxiliar para avisar a todos de quién está online
+    function actualizarListaUsuarios() {
+        // Creamos una lista limpia solo con los nombres
+        const listaNombres = [];
+        wss.clients.forEach((cliente) => {
+            if (cliente.readyState === WebSocket.OPEN && cliente.nombreUsuario) {
+                listaNombres.push(cliente.nombreUsuario);
+            }
         });
 
-        clientes.forEach(cliente => {
-          if (cliente.readyState === WebSocket.OPEN) {
-            // AQUI OCURRE LA MAGIA: 
-            // El servidor se lo manda a TODOS, pero el cliente decidirá si mostrarlo o no.
-            // (Esta es la forma fácil. La forma "Pro" sería guardar en qué canal está cada socket, 
-            // pero para empezar, dejaremos que el cliente filtre).
-            cliente.send(mensajeParaEnviar);
-          }
+        // Enviamos la lista a TODOS
+        broadcast({
+            tipo: 'lista-usuarios',
+            usuarios: listaNombres
         });
-    } catch (e) {
-        console.error("Error procesando mensaje:", e);
     }
-  });
 
-  // 4. Cuando alguien se desconecta
-  ws.on('close', () => {
-    clientes = clientes.filter(c => c !== ws);
-    console.log("Piloto desconectado. Quedan: " + clientes.length);
-  });
+    // Función para enviar a todos
+    function broadcast(data) {
+        wss.clients.forEach(cliente => {
+            if (cliente.readyState === WebSocket.OPEN) {
+                cliente.send(JSON.stringify(data));
+            }
+        });
+    }
 });
